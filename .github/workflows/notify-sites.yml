@@ -1,0 +1,37 @@
+# Notify sites (Marek 2026-10-06, "instant push"): when headshots land here, start the import of each site that got
+# files right away instead of waiting for its 15-minute schedule (which stays as a fallback). Only the four known
+# folder names are used, so nothing from a pushed commit reaches the shell. The secrets are fine-grained tokens with
+# "Actions: Read and write" on the site repos only (start workflows; no access to code); a token that can push here
+# cannot change this file (that needs the Workflows permission, which the headshot tokens do not have).
+name: Notify sites
+on:
+  push:
+    branches: [main]
+permissions: {}
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Start the imports
+        env:
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+          SREDAY_ORG_TOKEN: ${{ secrets.SITES_DISPATCH_TOKEN }}
+          PEC_ORG_TOKEN: ${{ secrets.PEC_DISPATCH_TOKEN }}
+        run: |
+          if git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then range="$BEFORE $AFTER"; else range="$AFTER~1 $AFTER"; fi
+          changed=$(git diff --name-only $range | cut -d/ -f1 | sort -u)
+          for key in sreday llmday platformday pec; do
+            echo "$changed" | grep -qx "$key" || continue
+            case $key in
+              sreday) repo=sreday/sreday; tok=$SREDAY_ORG_TOKEN ;;
+              llmday) repo=sreday/llmday; tok=$SREDAY_ORG_TOKEN ;;
+              platformday) repo=sreday/platformday; tok=$SREDAY_ORG_TOKEN ;;
+              pec) repo=Prompt-Engineering-Conference/2026.promptengineering.rocks; tok=$PEC_ORG_TOKEN ;;
+            esac
+            if [ -z "$tok" ]; then echo "::warning::no dispatch token for $repo, it imports on its 15-minute schedule"; continue; fi
+            GH_TOKEN=$tok gh workflow run import-headshots.yml -R "$repo" --ref main && echo "started the import of $repo"
+          done
